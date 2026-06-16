@@ -1,9 +1,11 @@
-// Package cli assembles the mathreflect command tree from the mathreflect
-// domain on top of the any-cli/kit framework.
+// Package cli assembles the mathreflect command tree.
 package cli
 
 import (
-	"github.com/tamnd/any-cli/kit"
+	"fmt"
+	"os"
+
+	"github.com/spf13/cobra"
 	"github.com/tamnd/mathreflect-cli/mathreflect"
 )
 
@@ -14,21 +16,67 @@ var (
 	Date    = "unknown"
 )
 
-// NewApp assembles the kit application from the mathreflect domain. The
-// domain's Register installs the client factory and every operation, so the
-// binary and a host (ant, which blank-imports the package) share one source of
-// truth. kit.Run turns the App into the CLI, plus the serve and mcp surfaces and
-// the typed-error-to-exit-code mapping.
-//
-// To add a command, declare it in mathreflect/domain.go with kit.Handle and it
-// appears here automatically. Reach for app.AddCommand only for a verb that does
-// not fit the emit-records shape, the way version does below.
-func NewApp() *kit.App {
-	id := mathreflect.Domain{}.Info().Identity
-	id.Version = Version
+// exit codes.
+const (
+	exitError  = 1
+	exitUsage  = 2
+	exitNoData = 3
+	exitNet    = 5
+)
 
-	app := kit.New(id)
-	(mathreflect.Domain{}).Register(app)
-	app.AddCommand(newVersionCmd())
-	return app
+// globalFlags holds the parsed global flags shared across subcommands.
+type globalFlags struct {
+	DBPath    string
+	StatePath string
+	ExportDir string
+	DelayMs   int
+	TimeoutS  int
+	Workers   int
+}
+
+// Root builds and returns the root cobra command for the mathreflect binary.
+func Root() *cobra.Command {
+	gf := &globalFlags{}
+	cfg := mathreflect.DefaultConfig()
+
+	root := &cobra.Command{
+		Use:   "mathreflect",
+		Short: "Competition math problems from Mathematical Reflections (awesomemath.org)",
+		Long: `mathreflect fetches competition math problems from the Mathematical Reflections
+journal published by AwesomeMath. Problems are extracted from PDFs and stored
+locally as structured Markdown files.
+
+Pipeline:
+  1. seed   -- fetch archive index, enqueue all issue PDF URLs
+  2. crawl  -- download each PDF, extract problems, store in DB
+  3. export -- write all problems to markdown files`,
+		SilenceUsage:  true,
+		SilenceErrors: true,
+	}
+
+	root.PersistentFlags().StringVar(&gf.DBPath, "db", cfg.DBPath, "Path to problems SQLite database")
+	root.PersistentFlags().StringVar(&gf.StatePath, "state", cfg.StatePath, "Path to crawl-queue SQLite database")
+	root.PersistentFlags().StringVar(&gf.ExportDir, "export-dir", cfg.ExportDir, "Markdown export directory")
+	root.PersistentFlags().IntVar(&gf.DelayMs, "delay", int(cfg.Delay.Milliseconds()), "Delay between requests (ms)")
+	root.PersistentFlags().IntVar(&gf.TimeoutS, "timeout", int(cfg.Timeout.Seconds()), "HTTP timeout (seconds)")
+	root.PersistentFlags().IntVar(&gf.Workers, "workers", cfg.Workers, "Parallel PDF download workers")
+
+	root.AddCommand(newSeedCmd(gf))
+	root.AddCommand(newCrawlCmd(gf))
+	root.AddCommand(newExportCmd(gf))
+	root.AddCommand(newInfoCmd(gf))
+	root.AddCommand(newVersionCmd())
+
+	return root
+}
+
+// run is the entry point called from main.
+func run(root *cobra.Command, args []string) int {
+	root.SetOut(os.Stdout)
+	root.SetErr(os.Stderr)
+	if err := root.Execute(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return exitError
+	}
+	return 0
 }
