@@ -1,0 +1,10 @@
+title       = "mathreflect"
+baseURL     = "https://mathreflect-cli.tamnd.com/"
+description = "Competition math problems from Mathematical Reflections (awesomemath.org)"
+contentDir  = "content"
+outputDir   = "public"
+theme       = "tago-doks"
+syntaxHighlight = "true"
+
+[params]
+github = "https://github.com/tamnd/mathreflect-cli"
