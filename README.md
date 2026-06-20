@@ -2,13 +2,25 @@
 
 Competition math problems from Mathematical Reflections (awesomemath.org)
 
-`mathreflect` is a single pure-Go binary. It reads public mathreflect data
-over plain HTTPS, shapes it into clean records, and prints output that pipes
-into the rest of your tools. No API key, nothing to run alongside it.
+`mathreflect` is a single pure-Go binary that fetches and locally archives
+competition math problems from the Mathematical Reflections journal published
+by AwesomeMath. Problems are extracted from PDFs and stored in a local SQLite
+database, then exported to structured Markdown files.
 
-The same package is also a [resource-URI driver](#use-it-as-a-resource-uri-driver),
-so a host program like [ant](https://github.com/tamnd/ant) can address
-mathreflect as `mathreflect://` URIs.
+No API key required.
+
+## Requirements
+
+`pdftotext` from the `poppler-utils` package is required to extract text from
+issue PDFs:
+
+```bash
+# macOS
+brew install poppler
+
+# Linux (Debian/Ubuntu)
+apt install poppler-utils
+```
 
 ## Install
 
@@ -16,69 +28,111 @@ mathreflect as `mathreflect://` URIs.
 go install github.com/tamnd/mathreflect-cli/cmd/mathreflect@latest
 ```
 
-Or grab a prebuilt binary from the [releases](https://github.com/tamnd/mathreflect-cli/releases), or run
-the container image:
+Or grab a prebuilt binary from the [releases](https://github.com/tamnd/mathreflect-cli/releases).
+
+## Quick start
 
 ```bash
-docker run --rm ghcr.io/tamnd/mathreflect:latest --help
+# Step 1: fetch the archive index and enqueue all issue URLs
+mathreflect seed
+
+# Step 2: download PDFs and extract problems (requires pdftotext)
+mathreflect crawl
+
+# Step 3: write all problems to markdown files
+mathreflect export
+
+# Check progress at any time
+mathreflect info
 ```
 
-## Usage
+## Commands
 
-```bash
-mathreflect page <path>                      # fetch one page as a record
-mathreflect page <path> -o json              # as JSON, ready for jq
-mathreflect page <path> --template '{{.Body}}'  # just the readable body text
-mathreflect links <path>                     # the pages it links to, one per line
-mathreflect --help                           # the whole command tree
+### `mathreflect seed`
+
+Fetch the archive index at `awesomemath.org/mathematical-reflections/archives/`,
+discover all issue PDF URLs, and enqueue any not yet visited.
+
+```
+mathreflect seed [--db PATH] [--state PATH] [--delay MS] [--timeout S]
 ```
 
-Every command shares one output contract: `-o table|json|jsonl|csv|tsv|url|raw`,
-`--fields` to pick columns, `--template` for a custom line, and `-n` to limit.
-The default adapts to where output goes (a table on a terminal, JSONL in a
-pipe), so the same command reads well by hand and parses cleanly downstream.
+### `mathreflect crawl`
 
-This is a fresh scaffold. It ships one example resource type, `page`, wired end
-to end. Model the real mathreflect records in `mathreflect/` and declare their
-operations in `mathreflect/domain.go`; each one becomes a command, an HTTP
-route, and an MCP tool at once.
+Download each queued issue PDF, extract problem statements using `pdftotext`,
+and store the results in the local SQLite database.
 
-## Serve it
-
-The same operations are available over HTTP and as an MCP tool set for agents,
-with no extra code:
-
-```bash
-mathreflect serve --addr :7777    # GET /v1/page/<path>  returns NDJSON
-mathreflect mcp                   # speak MCP over stdio
+```
+mathreflect crawl [--db PATH] [--state PATH] [--delay MS] [--timeout S]
+                  [--workers N] [--export-dir PATH]
 ```
 
-## Use it as a resource-URI driver
+### `mathreflect export`
 
-`mathreflect` registers a `mathreflect` domain the way a program registers a
-database driver with `database/sql`. A host enables it with one blank import:
+Read all problems from the database and write each one to a Markdown file.
 
-```go
-import _ "github.com/tamnd/mathreflect-cli/mathreflect"
+```
+mathreflect export [--db PATH] [--export-dir PATH]
 ```
 
-Then [ant](https://github.com/tamnd/ant) (or any program that links the package)
-dereferences `mathreflect://` URIs without knowing anything about mathreflect:
-
-```bash
-ant get mathreflect://page/<path>   # fetch the record
-ant cat mathreflect://page/<path>   # just the body text
-ant ls  mathreflect://page/<path>   # the pages it links to, each addressable
-ant url mathreflect://page/<path>   # the live https URL
+Output structure:
 ```
+$HOME/data/mathreflect/export/
+  README.md               -- index table of all problems
+  problems/
+    2006-1-J-1.md
+    2006-1-J-2.md
+    ...
+    2026-3-O-5.md
+```
+
+### `mathreflect info`
+
+Show database statistics and queue depth.
+
+```
+mathreflect info [--db PATH] [--state PATH]
+```
+
+Example output:
+```
+DB: /Users/alice/data/mathreflect/mathreflect.db (4.2 MB)
+  problems total:     2841
+  problems with body: 2841
+
+Queue: pending=0 in_progress=0 done=108 failed=0
+```
+
+## Problem ID format
+
+Each problem is identified by: `{year}-{issue}-{section}-{number}`
+
+Example: `2026-3-O-5` = Year 2026, Issue 3, Olympiad section, Problem 5.
+
+Sections:
+- `J` = Junior
+- `S` = Senior
+- `O` = Olympiad
+- `U` = Undergraduate
+- `I` = Individual
+
+## Flags
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--db` | `$HOME/data/mathreflect/mathreflect.db` | Problems SQLite database |
+| `--state` | `$HOME/data/mathreflect/state.db` | Crawl-queue SQLite database |
+| `--export-dir` | `$HOME/data/mathreflect/export` | Markdown output directory |
+| `--delay` | `1000` | Delay between requests (ms) |
+| `--timeout` | `30` | HTTP timeout (seconds) |
+| `--workers` | `2` | Parallel PDF download workers |
 
 ## Development
 
 ```
-cmd/mathreflect/   thin main: hands cli.NewApp to kit.Run
-cli/                 assembles the kit App from the mathreflect domain
-mathreflect/                the library: HTTP client, data models, and domain.go (the driver)
-docs/                tago documentation site
+cmd/mathreflect/   main entry point
+cli/               cobra command tree
+mathreflect/       library: client, DB, state, PDF parser, tasks
 ```
 
 ```bash
@@ -86,20 +140,6 @@ make build      # ./bin/mathreflect
 make test       # go test ./...
 make vet        # go vet ./...
 ```
-
-## Releasing
-
-Push a version tag and GitHub Actions runs GoReleaser, which builds the
-archives, Linux packages, the multi-arch GHCR image, checksums, SBOMs, and a
-cosign signature:
-
-```bash
-git tag v0.1.0
-git push --tags
-```
-
-The Homebrew and Scoop steps self-disable until their tokens exist, so the first
-release works with no extra secrets.
 
 ## License
 
